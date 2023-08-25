@@ -15,6 +15,12 @@ import json
 import re
 from pymavlink import mavexpression
 
+try:
+    import wolfssl
+except ImportError:
+    print("You must run 'python setup.py install' to use the examples")
+    sys.exit()
+
 # We want to re-export x25crc here
 from pymavlink.generator.mavcrc import x25crc as x25crc
 
@@ -1221,6 +1227,7 @@ class mavtcp(mavfile):
         if len(a) != 2:
             print("TCP ports must be specified as host:port")
             sys.exit(1)
+        
         self.destination_addr = (a[0], int(a[1]))
 
         self.autoreconnect = autoreconnect
@@ -1229,6 +1236,7 @@ class mavtcp(mavfile):
         self.do_connect()
 
         mavfile.__init__(self, self.port.fileno(), "tcp:" + device, source_system=source_system, source_component=source_component, use_native=use_native)
+    
 
     def do_connect(self):
         if sys.platform != 'darwin':
@@ -1242,7 +1250,27 @@ class mavtcp(mavfile):
             try:
                 if sys.platform == 'darwin':
                     self.port = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.port.connect(self.destination_addr)
+                
+                CA_DATA = '/home/beatriz/ssl-tutorial-2.3/finished_src/certs/ca-cert.pem'
+
+                context = wolfssl.SSLContext(wolfssl.PROTOCOL_TLSv1_2)
+                
+                context.verify_mode = wolfssl.CERT_REQUIRED
+                print("Before load verify locations")
+                context.load_verify_locations(CA_DATA)
+
+                print("After load verify locations")
+
+                wolfssl.WolfSSL.enable_debug()
+                global secure_socket
+                
+                secure_socket = context.wrap_socket(self.port)
+                secure_socket.connect(self.destination_addr)
+                # secure_socket.write("Teste novamente com o servidor!")
+
+                # self.port.connect(self.destination_addr)            
+                print('After connecting, everything fine')
+                
                 break
             except Exception as e:
                 if retries == 0:
@@ -1257,6 +1285,9 @@ class mavtcp(mavfile):
         self.port.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
 
     def close(self):
+        # Feche a conexao SSL antes de fechar o socket
+        wolfssl.wolfSSL_free(self.ssl)
+        wolfssl.wolfSSL_CTX_free(self.ctx)
         self.port.close()
 
     def handle_disconnect(self):
@@ -1274,13 +1305,18 @@ class mavtcp(mavfile):
         if n is None:
             n = self.mav.bytes_needed()
         try:
-            data = self.port.recv(n)
-        except socket.error as e:
-            if e.errno in [ errno.EAGAIN, errno.EWOULDBLOCK ]:
+            data = secure_socket.recv(n)
+            # print('Read data = ' + 'N = ' + str(n))
+            # data = self.port.recv(n)
+        except wolfssl.exceptions.SSLWantReadError as e:
                 return ""
-            if e.errno in [ errno.ECONNRESET, errno.EPIPE ]:
-                self.handle_disconnect()
-            raise
+            # raise
+        # except socket.error as e:
+        #     if e.errno in [ errno.EAGAIN, errno.EWOULDBLOCK ]:
+        #         return ""
+        #     if e.errno in [ errno.ECONNRESET, errno.EPIPE ]:
+        #         self.handle_disconnect()
+            # raise
         if len(data) == 0:
             self.handle_eof()
 
@@ -1295,7 +1331,9 @@ class mavtcp(mavfile):
         if self.port is None:
             return
         try:
-            self.port.send(buf)
+            # print('Send data = ' + 'N = ' + str(len(buf)))
+            secure_socket.send(buf)
+            # self.port.send(buf)
         except socket.error as e:
             if e.errno in [ errno.ECONNRESET, errno.EPIPE ]:
                 self.handle_disconnect()
@@ -2092,7 +2130,6 @@ mode_mapping_blimp = {
     1 : 'MANUAL',
     2 : 'VELOCITY',
     3 : 'LOITER',
-    4 : 'RTL',
 }
 
 AP_MAV_TYPE_MODE_MAP_DEFAULT = {
@@ -2107,9 +2144,9 @@ AP_MAV_TYPE_MODE_MAP_DEFAULT = {
     mavlink.MAV_TYPE_COAXIAL:     mode_mapping_acm,
     # plane
     mavlink.MAV_TYPE_FIXED_WING: mode_mapping_apm,
-    mavlink.MAV_TYPE_VTOL_DUOROTOR: mode_mapping_apm,
-    mavlink.MAV_TYPE_VTOL_QUADROTOR: mode_mapping_apm,
-    mavlink.MAV_TYPE_VTOL_TILTROTOR: mode_mapping_apm,
+    # mavlink.MAV_TYPE_VTOL_DUOROTOR: mode_mapping_apm,
+    # mavlink.MAV_TYPE_VTOL_QUADROTOR: mode_mapping_apm,
+    # mavlink.MAV_TYPE_VTOL_TILTROTOR: mode_mapping_apm,
     # rover
     mavlink.MAV_TYPE_GROUND_ROVER: mode_mapping_rover,
     # boat
